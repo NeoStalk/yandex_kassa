@@ -1,0 +1,5 @@
+name = Yandex Kassa Payment
+description = Yandex Kassa Integration
+core = 7.x
+
+

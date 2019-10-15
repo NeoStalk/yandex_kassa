@@ -1,0 +1,155 @@
+<?php
+
+require drupal_get_path('module', 'yandex_kassa') . '/lib/autoload.php';
+
+use YandexCheckout\Client;
+
+/**
+ * Implements hook_menu().
+ */
+function yandex_kassa_menu() {
+
+  $items = array();
+
+  $items['payment-page'] = array(
+    'title' => 'Пополнение баланса',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('yandex_kassa_payment_form'),
+    'access arguments' => array('yandex_kassa page access'),
+  );
+
+  $items['payment-page/result'] = array(
+    'title' => 'Результат операции',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('yandex_kassa_payment_result_form'),
+    'access arguments' => array('yandex_kassa page access'),
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook permission().
+ */
+function yandex_kassa_permission() {
+  return array(
+    'yandex_kassa page access' => array(
+      'title' => t('Доступ к странице пополнения баланса.'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function yandex_kassa_form_alter(&$form, &$form_state, $form_id) {
+  if ($form_id == 'user_profile_form') {
+    $form['profile_employer']['field_user_balance']['#disabled'] = TRUE;
+  }
+}
+
+/**
+ * Implements hook_form().
+ */
+function yandex_kassa_payment_form($form, &$form_state) {
+
+  $form = array();
+
+  $form['amount'] = array(
+    '#type' => 'textfield',
+    '#title' => 'Сумма',
+    '#required' => TRUE,
+  );
+  $form['payment'] = array(
+    '#type' => 'submit',
+    '#value' => t('Оплатить'),
+    '#weight' => 600,
+  //  '#validate' => array('yandex_kassa_validate'),
+  // Use default and an additional submit handler.
+    '#submit' => array('yandex_kassa_form_submit'),
+  );
+
+  return $form;
+}
+
+/**
+ * Implements form_submit().
+ */
+function yandex_kassa_form_submit($form, &$form_state) {
+  global $user;
+  $client = new Client();
+  $client->setAuth('641529', 'test_dHOeP5RdEj7dAOren9m-K6Hw_TODIUTVGhnydiiWkeI');
+  $payment = $client->createPayment(
+      array(
+        'amount' => array(
+          'value' => $form_state['input']['amount'],
+          'currency' => 'RUB',
+        ),
+        'confirmation' => array(
+          'type' => 'redirect',
+          'return_url' => 'https://размещение-вакансий.рф/payment-page/result',
+        ),
+        'capture' => TRUE,
+        'description' => 'Пополнение баланса',
+        'metadata' => array(
+          'user_id' => $user->uid,
+        ),
+      ),
+      uniqid('', TRUE)
+  );
+  create_payment($payment['id'], $user->uid, $payment['amount']['value']);
+  drupal_goto($payment['confirmation']['confirmation_url']);
+}
+
+/**
+ * Создаем платеж для текущего пользователя.
+ */
+function create_payment($payment_id, $user_id, $amount) {
+  global $user;
+  $payment_node = entity_create('node', array('type' => 'payment'));
+  $payment_node->uid = $user->uid;
+  $payment_node_wrapper = entity_metadata_wrapper('node', $payment_node);
+  $payment_node_wrapper->title = 'Платеж ' . $payment_id;
+  $payment_node_wrapper->field_id = $payment_id;
+  $payment_node_wrapper->field_date = strtotime('now');
+  $payment_node_wrapper->field_payment_amount = $amount;
+  $payment_node_wrapper->field_user = $user_id;
+  $payment_node_wrapper->save();
+}
+
+/**
+ * Проверка результата платежа.
+ */
+function yandex_kassa_payment_result_form($form, &$form_state) {
+  global $user;
+  
+  $form = array();
+  
+  $payment_node_nid = db_select('node', 'n')
+    ->fields('n', array('nid'))
+    ->fields('n', array('type'))
+    ->condition('n.type', 'payment')
+    ->condition('n.uid', $user->uid, '=')
+    ->orderBy('n.created', 'DESC') 
+    ->range(0, 1)
+    ->execute()
+    ->fetchCol();
+  $payment_node = node_load($payment_node_nid[0]);
+  $payment_node_wrapper = entity_metadata_wrapper('node', $payment_node);
+  $client = new Client();
+  $client->setAuth('641529', 'test_dHOeP5RdEj7dAOren9m-K6Hw_TODIUTVGhnydiiWkeI');
+  $payment_result = $client->getPaymentInfo($payment_node_wrapper->field_id->value());
+
+  if ($payment_result['status'] == 'succeeded') {
+    $profile = profile2_load_by_user($user, 'employer');
+    $profile_wrapper = entity_metadata_wrapper('profile2', $profile);
+    $balance = $profile_wrapper->field_user_balance->value() + $payment_result['amount']['value'];
+    $profile_wrapper->field_user_balance = $balance;
+    $profile_wrapper->save();
+    $form['message'] = array(
+      '#markup' => '<p>Ваш баланс пополнен на ' . $payment_result['amount']['value'] . ' и равен ' . $balance . '</p>',
+    );
+  }
+
+  return $form;
+}

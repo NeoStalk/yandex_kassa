@@ -1,0 +1,39 @@
+<?php
+
+/**
+ * Implemrnts hook enable().
+ */
+function yandex_kassa_enable() {
+
+  // Check if our field is not already created.
+  if (!field_info_field('field_user_balance')) {
+    $field = array(
+      'field_name' => 'field_user_balance',
+      'type' => 'number_decimal',
+    );
+    field_create_field($field);
+
+    // Create the instance on the bundle.
+    $instance = array(
+      'field_name' => 'field_user_balance',
+      'entity_type' => 'profile2',
+      'label' => 'Баланс',
+      'bundle' => 'employer',
+      'required' => FALSE,
+      'default_value' => array(
+        array('value' => 0),
+      ),
+      'widget' => array(
+        'type' => 'textfield',
+      ),
+    );
+    field_create_instance($instance);
+  }
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function yandex_kassa_uninstall() {
+  field_delete_field('field_user_balance');
+}
